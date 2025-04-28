@@ -102,10 +102,10 @@ jobs:
       - name: Set OS specific variables
         id: os_vars
         run: |
-          OS_NAME=Windows
-          SKIA_DIR_SUFFIX=Release-x64
-          echo "OS_NAME=${OS_NAME}" >> $GITHUB_OUTPUT
-          echo "SKIA_DIR_SUFFIX=${SKIA_DIR_SUFFIX}" >> $GITHUB_OUTPUT
+          OS_NAME="Windows"
+          SKIA_DIR_SUFFIX="Release-x64"
+          echo "OS_NAME=$OS_NAME" | Out-File -Path $GITHUB_OUTPUT -Append
+          echo "SKIA_DIR_SUFFIX=$SKIA_DIR_SUFFIX" | Out-File -Path $GITHUB_OUTPUT -Append
 
       # Manual setup for Ninja on Windows to avoid deprecated command
       - name: (Windows) Setup Ninja
