@@ -28,7 +28,6 @@ jobs:
         data=$(curl -sL https://api.github.com/repos/aseprite/aseprite/releases/latest)
         LATEST_TAG=$(echo "${data}" | jq -r '.tag_name')
         # Assuming the first asset is the source code zip
-        # Use jq test to ensure assets array exists and is not empty before accessing [0]
         if echo "${data}" | jq -e '.assets | length > 0' > /dev/null; then
           DOWNLOAD_URL=$(echo "${data}" | jq -r '.assets[0].browser_download_url')
         else
@@ -40,7 +39,7 @@ jobs:
         # Create a file with the latest tag name. This file will be used for caching.
         echo "${LATEST_TAG}" > latest_aseprite_tag.txt
 
-        # Set simple outputs using environment file
+        # Set simple outputs using environment file (Bash syntax here is fine as this job uses default shell, usually bash)
         echo "latest_tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
         echo "download_url=${DOWNLOAD_URL}" >> $GITHUB_OUTPUT
 
@@ -98,18 +97,25 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Set OS specific variables (Simplified for single OS)
+      # --- Start of the problematic step block ---
+      # Set OS specific variables (Simplified for single OS - Windows)
       - name: Set OS specific variables
         id: os_vars
-        shell: pwsh
-        run: |
-          OS_NAME="Windows"
-          SKIA_DIR_SUFFIX="Release-x64"
+        shell: pwsh # <-- THIS ENSURES PowerShell is used
+        run: | # <-- The script starts here
+          # Use PowerShell syntax for variable assignment ($VariableName = "value")
+          $OS_NAME = "Windows"
+          $SKIA_DIR_SUFFIX = "Release-x64"
+
+          # Write variables to GITHUB_OUTPUT using PowerShell syntax
+          # The format must be name=value, written to the file path in $GITHUB_OUTPUT
           echo "OS_NAME=$OS_NAME" | Out-File -Path $GITHUB_OUTPUT -Append
           echo "SKIA_DIR_SUFFIX=$SKIA_DIR_SUFFIX" | Out-File -Path $GITHUB_OUTPUT -Append
+      # --- End of the problematic step block ---
 
       # Manual setup for Ninja on Windows to avoid deprecated command
       - name: (Windows) Setup Ninja
+        shell: bash # Explicitly use bash for curl/unzip/echo commands in this step
         run: |
           echo "Setting up Ninja on Windows..."
           # Download Ninja (Using v1.11.1 as a common recent version)
@@ -117,7 +123,7 @@ jobs:
           # Create a directory for Ninja and extract
           mkdir ninja-build
           unzip ninja-win.zip -d ninja-build
-          # Add the directory to the PATH using environment file
+          # Add the directory to the PATH using environment file (Bash syntax >> works here)
           echo "$(pwd)/ninja-build" >> $GITHUB_PATH
           # Verify Ninja is in PATH
           ninja --version
@@ -141,6 +147,7 @@ jobs:
 
       - name: Download Skia if not in cache
         if: steps.skia-cache.outputs.cache-hit != 'true'
+        shell: bash # Use bash for curl/unzip
         run: |
           # Directly use Windows as the OS name for Skia download
           SKIA_OS_NAME=Windows
@@ -149,6 +156,7 @@ jobs:
           unzip Skia-${SKIA_OS_NAME}-Release-X64.zip -d skia
 
       - name: Download Aseprite release source
+        shell: bash # Use bash for curl/unzip/mkdir
         run: |
           echo "Downloading Aseprite source..."
           curl -o Aseprite-source.zip -L ${{ needs.check-version.outputs.download_url }}
@@ -157,7 +165,7 @@ jobs:
 
       - name: Run CMake
         working-directory: aseprite/build
-        shell: bash
+        shell: bash # Use bash
         run: |
           SKIA_LIB_DIR="../../skia/out/Release-x64" # Directly use Release-x64 for Windows
 
@@ -166,9 +174,9 @@ jobs:
           # Only run Windows-specific cmake command as matrix is only windows-latest
           cmake ${CMAKE_COMMON_ARGS} -DCMAKE_IGNORE_PATH='C:/ProgramData/chocolatey/bin/;C:/Strawberry/c/bin/'
 
-
       - name: Run Ninja
         working-directory: aseprite/build
+        shell: bash # Use bash
         run: ninja aseprite
 
       - name: Clean up build
@@ -179,12 +187,13 @@ jobs:
 
       - name: (Windows) Make portable zip
         working-directory: aseprite/build/bin
-        shell: bash
+        shell: bash # Use bash
         run: echo '# This file is here so Aseprite behaves as a portable program' > aseprite.ini
 
       - name: Create release archive
         working-directory: aseprite/build/bin
-        run: 7z a Aseprite-${{ needs.check-version.outputs.latest_tag }}-windows.zip * # Use 'windows' in filename
+        shell: bash # Use bash
+        run: 7z a Aseprite-${{ needs.check-version.outputs.latest_tag }}-windows.zip *
 
       - name: Upload release asset
         uses: actions/upload-release-asset@v1
