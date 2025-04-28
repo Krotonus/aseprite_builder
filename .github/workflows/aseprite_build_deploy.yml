@@ -19,41 +19,45 @@ jobs:
       latest_tag: ${{ steps.version_info.outputs.latest_tag }}
       should_build: ${{ steps.should_build.outputs.should_build }}
       upload_url: ${{ steps.create_release.outputs.upload_url }}
+      version_info: ${{ steps.version_info.outputs.version_info }} # Ensure version_info is also an output
     steps:
     - name: Get latest version info
       id: version_info
       run: |
         data=$(curl -sL https://api.github.com/repos/aseprite/aseprite/releases/latest)
         LATEST_TAG=$(echo "${data}" | jq -r '.tag_name')
+        # Assuming the first asset is the source code zip
         DOWNLOAD_URL=$(echo "${data}" | jq -r '.assets[0].browser_download_url')
         VERSION_INFO=$(echo "${data}" | jq -r '.body')
 
         # Create a file with the latest tag name. This file will be used for caching.
         echo "${LATEST_TAG}" > latest_aseprite_tag.txt
 
-        # Set outputs using environment file
-        printf "latest_tag=%s\n" "$LATEST_TAG" >> $GITHUB_OUTPUT
-        printf "download_url=%s\n" "$DOWNLOAD_URL" >> $GITHUB_OUTPUT
-        printf "version_info=%s\n" "$VERSION_INFO" >> $GITHUB_OUTPUT
+        # Set simple outputs using environment file
+        echo "latest_tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
+        echo "download_url=${DOWNLOAD_URL}" >> $GITHUB_OUTPUT
+
+        # Set multi-line output using a delimiter for version_info
+        # Choose a unique delimiter, e.g., EOF_VERSION_INFO
+        DELIMITER=$(uuidgen) # Use uuidgen for a highly unique delimiter
+        echo "version_info<<$DELIMITER" >> $GITHUB_OUTPUT
+        echo "${VERSION_INFO}" >> $GITHUB_OUTPUT
+        echo "$DELIMITER" >> $GITHUB_OUTPUT
 
     - name: Load version from cache
       id: version_check
-      # Use a consistent path for the cache file
       uses: actions/cache@v4
       with:
-        path: latest_aseprite_tag.txt # Cache the consistent filename
-        key: aseprite-cached-version-${{ steps.version_info.outputs.latest_tag }} # Use the tag in the key
+        path: latest_aseprite_tag.txt
+        key: aseprite-cached-version-${{ steps.version_info.outputs.latest_tag }}
         restore-keys: |
-          aseprite-cached-version- # Fallback key
+          aseprite-cached-version-
 
     - name: Should we start new build?
       id: should_build
-      # If the cache-hit is NOT true, it means this tag hasn't been cached before
       if: steps.version_check.outputs.cache-hit != 'true'
       run: |
-        # Set output using environment file
         echo "should_build=true" >> $GITHUB_OUTPUT
-      # If cache hit, should_build output is not set, defaulting to false/empty
 
     - name: Create Release
       id: create_release
@@ -65,7 +69,7 @@ jobs:
         tag_name: ${{ steps.version_info.outputs.latest_tag }}
         release_name: Release Aseprite ${{ steps.version_info.outputs.latest_tag }}
         body: |
-          ${{ steps.version_info.outputs.version_info }}
+          ${{ steps.version_info.outputs.version_info }} # This will now correctly use the multi-line output
         draft: true
         prerelease: false
 
@@ -76,7 +80,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
         matrix:
-          os: [windows-latest, ubuntu-latest, macOS-latest] # Included all OS as before
+          os: [windows-latest, ubuntu-latest, macOS-latest]
         fail-fast: false
     steps:
       - name: Checkout code
@@ -104,13 +108,12 @@ jobs:
               ;;
           esac
           echo "OS_NAME=${OS_NAME}" >> $GITHUB_OUTPUT
-          echo "SKIA_DIR_SUFFIX=${SKIA_DIR_SUFFIX}" >> $GITHUB_OUTPUT # Not strictly needed here as it's hardcoded, but good pattern
+          echo "SKIA_DIR_SUFFIX=${SKIA_DIR_SUFFIX}" >> $GITHUB_OUTPUT
 
       - name: Install dependencies
         run: |
           case ${{ matrix.os }} in
             windows-latest)
-              # Using actions for Ninja and VS environment setup
               echo "Installing Windows dependencies..."
               ;;
             ubuntu-latest)
@@ -129,7 +132,6 @@ jobs:
               ;;
           esac
 
-      # Use dedicated actions for Windows setup instead of manual commands and VsDevCmd.bat
       - name: (Windows) Setup Ninja
         if: matrix.os == 'windows-latest'
         uses: seanmiddleditch/gha-setup-ninja@v1
@@ -138,7 +140,6 @@ jobs:
         if: matrix.os == 'windows-latest'
         uses: seanmiddleditch/gha-setup-vsdevenv@v1
         with:
-          # Adjust the version and edition based on what's available on the runner
           vs-version: 2019
           vs-edition: Enterprise
           arch: x64
@@ -148,7 +149,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: skia
-          key: skia-${{ matrix.os }}-m81-b607b32047 # Include Skia version in key
+          key: skia-${{ matrix.os }}-m81-b607b32047
           restore-keys: |
             skia-${{ matrix.os }}-
 
@@ -169,7 +170,6 @@ jobs:
 
       - name: Run CMake
         working-directory: aseprite/build
-        # Use bash as the default shell where possible
         shell: bash
         run: |
           SKIA_OS_NAME=${{ steps.os_vars.outputs.OS_NAME }}
@@ -179,15 +179,12 @@ jobs:
 
           case ${{ matrix.os }} in
             windows-latest)
-              # Add Windows-specific flags
               cmake ${CMAKE_COMMON_ARGS} -DCMAKE_IGNORE_PATH='C:/ProgramData/chocolatey/bin/;C:/Strawberry/c/bin/'
               ;;
             ubuntu-latest)
-              # Add Ubuntu-specific flags
               cmake ${CMAKE_COMMON_ARGS}
               ;;
             macOS-latest)
-              # Add macOS-specific flags
               cmake ${CMAKE_COMMON_ARGS} -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=10.9 -DCMAKE_OSX_SYSROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.15.sdk
               ;;
             *)
@@ -203,24 +200,17 @@ jobs:
       - name: Clean up build
         working-directory: aseprite/build/bin
         shell: bash
-        # Use grep -v to list files NOT matching the patterns and then xargs rm
-        # This is safer than a direct rm with wildcards which might fail if no matches
         run: |
           ls | grep -v -e '^gen$' -e '^modp_b64_gen$' -e '^gen\.exe$' -e '^gen\.exe\.manifest$' -e '^modp_b64_gen\.exe$' -e '^modp_b64_gen\.exe\.manifest$' | xargs rm -f
-        # Alternative using find: find . ! \( -name 'gen*' -o -name 'modp_b64_gen*' \) -delete
 
       - name: (Windows) Make portable zip
         if: matrix.os == 'windows-latest'
         working-directory: aseprite/build/bin
-        # Use cmd shell for Windows-specific file operations if needed, or bash
         shell: bash
         run: echo '# This file is here so Aseprite behaves as a portable program' > aseprite.ini
 
       - name: Create release archive
         working-directory: aseprite/build/bin
-        # Ensure 7z is in the PATH - brew installs it on macOS, apt installs it on Ubuntu,
-        # on Windows, seanmiddleditch/gha-setup-vsdevenv@v1 might include it or you might need
-        # a separate step/action to install p7zip if not available.
         run: 7z a Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ matrix.os }}.zip *
 
       - name: Upload release asset
