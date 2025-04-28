@@ -101,6 +101,7 @@ jobs:
       # Set OS specific variables (Simplified for single OS)
       - name: Set OS specific variables
         id: os_vars
+        shell: pwsh
         run: |
           OS_NAME="Windows"
           SKIA_DIR_SUFFIX="Release-x64"
