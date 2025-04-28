@@ -25,20 +25,22 @@ jobs:
       run: |
         data=$(curl -sL https://api.github.com/repos/aseprite/aseprite/releases/latest)
         LATEST_TAG=$(echo "${data}" | jq -r '.tag_name')
-        DOWNLOAD_URL=$(echo "${data}" | jq -r '.assets[0].browser_download_url') # Adjusted to get the first download URL
+        # Assuming the first asset is the source code zip
+        DOWNLOAD_URL=$(echo "${data}" | jq -r '.assets[0].browser_download_url')
         VERSION_INFO=$(echo "${data}" | jq -r '.body')
 
         # Create a file with the latest tag name. This file will be used for caching.
         echo "${LATEST_TAG}" > latest_aseprite_tag.txt
 
-        echo "::set-output name=latest_tag::${LATEST_TAG}"
-        echo "::set-output name=download_url::${DOWNLOAD_URL}"
-        echo "::set-output name=version_info::${VERSION_INFO}"
+        # Set outputs using environment file
+        echo "latest_tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
+        echo "download_url=${DOWNLOAD_URL}" >> $GITHUB_OUTPUT
+        echo "version_info=${VERSION_INFO}" >> $GITHUB_OUTPUT
 
     - name: Load version from cache
       id: version_check
       # Use a consistent path for the cache file
-      uses: actions/cache@v4 # Updated to v4
+      uses: actions/cache@v4
       with:
         path: latest_aseprite_tag.txt # Cache the consistent filename
         key: aseprite-cached-version-${{ steps.version_info.outputs.latest_tag }} # Use the tag in the key
@@ -49,11 +51,14 @@ jobs:
       id: should_build
       # If the cache-hit is NOT true, it means this tag hasn't been cached before
       if: steps.version_check.outputs.cache-hit != 'true'
-      run: echo "::set-output name=should_build::true"
+      run: |
+        # Set output using environment file
+        echo "should_build=true" >> $GITHUB_OUTPUT
+      # If cache hit, should_build output is not set, defaulting to false/empty
 
     - name: Create Release
       id: create_release
-      if: steps.should_build.outputs.should_build == 'true' # Ensure condition is checked correctly
+      if: steps.should_build.outputs.should_build == 'true'
       uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -68,30 +73,80 @@ jobs:
   build-aseprite:
     name: Build Aseprite
     needs: check-version
-    # Only run this job if the check-version job determined a build is needed
     if: ${{ needs.check-version.outputs.should_build == 'true' }}
     runs-on: ${{ matrix.os }}
     strategy:
         matrix:
-          os: [windows-latest] # Added ubuntu-latest and macOS-latest back for multi-platform build
+          os: [windows-latest, ubuntu-latest, macOS-latest] # Included all OS as before
         fail-fast: false
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4 # Good practice to include checkout
+        uses: actions/checkout@v4
 
-      - name: (Windows) Install dependencies
+      - name: Set OS specific variables
+        id: os_vars
+        run: |
+          case ${{ matrix.os }} in
+            windows-latest)
+              OS_NAME=Windows
+              SKIA_DIR_SUFFIX=Release-x64
+              ;;
+            ubuntu-latest)
+              OS_NAME=Linux
+              SKIA_DIR_SUFFIX=Release-x64
+              ;;
+            macOS-latest)
+              OS_NAME=Darwin
+              SKIA_DIR_SUFFIX=Release-x64
+              ;;
+            *)
+              echo "Unknown OS"
+              exit 1
+              ;;
+          esac
+          echo "OS_NAME=${OS_NAME}" >> $GITHUB_OUTPUT
+          echo "SKIA_DIR_SUFFIX=${SKIA_DIR_SUFFIX}" >> $GITHUB_OUTPUT # Not strictly needed here as it's hardcoded, but good pattern
+
+      - name: Install dependencies
+        run: |
+          case ${{ matrix.os }} in
+            windows-latest)
+              # Using actions for Ninja and VS environment setup
+              echo "Installing Windows dependencies..."
+              ;;
+            ubuntu-latest)
+              echo "Installing Ubuntu dependencies..."
+              sudo apt update
+              sudo apt install -y cmake ninja-build libxcursor-dev libxi-dev libgl1-mesa-dev
+              ;;
+            macOS-latest)
+              echo "Installing macOS dependencies..."
+              brew update
+              brew install ninja p7zip
+              ;;
+            *)
+              echo "Unknown OS for dependency installation"
+              exit 1
+              ;;
+          esac
+
+      # Use dedicated actions for Windows setup instead of manual commands and VsDevCmd.bat
+      - name: (Windows) Setup Ninja
         if: matrix.os == 'windows-latest'
         uses: seanmiddleditch/gha-setup-ninja@v1
-      - name: (Ubuntu) Install dependencies
-        if: matrix.os == 'ubuntu-latest'
-        run: sudo apt update && sudo apt install -y cmake ninja-build libxcursor-dev libxi-dev libgl1-mesa-dev
-      - name: (macOS) Install dependencies
-        if: matrix.os == 'macOS-latest'
-        run: brew update && brew install ninja p7zip
+
+      - name: (Windows) Setup Visual Studio Environment
+        if: matrix.os == 'windows-latest'
+        uses: seanmiddleditch/gha-setup-vsdevenv@v1
+        with:
+          # Adjust the version and edition based on what's available on the runner
+          vs-version: 2019
+          vs-edition: Enterprise
+          arch: x64
 
       - name: Get Skia from cache
         id: skia-cache
-        uses: actions/cache@v4 # Updated to v4
+        uses: actions/cache@v4
         with:
           path: skia
           key: skia-${{ matrix.os }}-m81-b607b32047 # Include Skia version in key
@@ -101,51 +156,46 @@ jobs:
       - name: Download Skia if not in cache
         if: steps.skia-cache.outputs.cache-hit != 'true'
         run: |
-          curl -o Skia-${{ runner.os }}-Release-X64.zip -L https://github.com/aseprite/skia/releases/download/m81-b607b32047/Skia-${{ runner.os }}-Release-X64.zip
-          unzip Skia-${{ runner.os }}-Release-X64.zip -d skia
+          SKIA_OS_NAME=${{ steps.os_vars.outputs.OS_NAME }}
+          echo "Downloading Skia for ${SKIA_OS_NAME}..."
+          curl -o Skia-${SKIA_OS_NAME}-Release-X64.zip -L https://github.com/aseprite/skia/releases/download/m81-b607b32047/Skia-${SKIA_OS_NAME}-Release-X64.zip
+          unzip Skia-${SKIA_OS_NAME}-Release-X64.zip -d skia
 
       - name: Download Aseprite release source
         run: |
+          echo "Downloading Aseprite source..."
           curl -o Aseprite-source.zip -L ${{ needs.check-version.outputs.download_url }}
           unzip Aseprite-source.zip -d aseprite
           mkdir -p aseprite/build
 
-      - name: (Windows) Set architecture for the produced binary
-        if: matrix.os == 'windows-latest'
-        shell: cmd
-        # This might require adjustment based on your VS installation path and version
-        run: |
-          call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\Common7\Tools\VsDevCmd.bat" -arch=x64
-          # Set environment variables for subsequent steps in the same shell
-          echo "::add-path::%VCINSTALLDIR%\bin\HostX64\x64"
-          echo "::set-env name=LIB::%LIB%;%VCINSTALLDIR%\lib\x64"
-          echo "::set-env name=INCLUDE::%INCLUDE%;%VCINSTALLDIR%\include"
-
-
-      # The gha-setup-vsdevenv action might be sufficient,
-      # consider if the manual step above is still necessary or if it conflicts.
-      # - name: (Windows) Setting Visual Studio build environment variables and paths
-      #   if: matrix.os == 'windows-latest'
-      #   uses: seanmiddleditch/gha-setup-vsdevenv@v1
-
-
       - name: Run CMake
         working-directory: aseprite/build
-        shell: bash # Use bash for consistency where possible, except for specific cmd needs
+        # Use bash as the default shell where possible
+        shell: bash
         run: |
-          # Common CMake command parts
-          CMAKE_COMMON_ARGS="-DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DLAF_BACKEND=skia -DSKIA_DIR=../../skia -DSKIA_LIBRARY_DIR=../../skia/out/Release-x64 -G Ninja .."
+          SKIA_OS_NAME=${{ steps.os_vars.outputs.OS_NAME }}
+          SKIA_LIB_DIR="../../skia/out/${{ steps.os_vars.outputs.SKIA_DIR_SUFFIX }}"
 
-          if [ "${{ matrix.os }}" == "windows-latest" ]; then
-            # Add Windows-specific flags
-            cmake ${CMAKE_COMMON_ARGS} -DCMAKE_IGNORE_PATH='C:/ProgramData/chocolatey/bin/;C:/Strawberry/c/bin/'
-          elif [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
-            # Add Ubuntu-specific flags
-            cmake ${CMAKE_COMMON_ARGS}
-          elif [ "${{ matrix.os }}" == "macOS-latest" ]; then
-            # Add macOS-specific flags
-            cmake ${CMAKE_COMMON_ARGS} -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=10.9 -DCMAKE_OSX_SYSROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.15.sdk
-          fi
+          CMAKE_COMMON_ARGS="-DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DLAF_BACKEND=skia -DSKIA_DIR=../../skia -DSKIA_LIBRARY_DIR=${SKIA_LIB_DIR} -G Ninja .."
+
+          case ${{ matrix.os }} in
+            windows-latest)
+              # Add Windows-specific flags
+              cmake ${CMAKE_COMMON_ARGS} -DCMAKE_IGNORE_PATH='C:/ProgramData/chocolatey/bin/;C:/Strawberry/c/bin/'
+              ;;
+            ubuntu-latest)
+              # Add Ubuntu-specific flags
+              cmake ${CMAKE_COMMON_ARGS}
+              ;;
+            macOS-latest)
+              # Add macOS-specific flags
+              cmake ${CMAKE_COMMON_ARGS} -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=10.9 -DCMAKE_OSX_SYSROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.15.sdk
+              ;;
+            *)
+              echo "Unknown OS for CMake configuration"
+              exit 1
+              ;;
+          esac
 
       - name: Run Ninja
         working-directory: aseprite/build
@@ -154,24 +204,33 @@ jobs:
       - name: Clean up build
         working-directory: aseprite/build/bin
         shell: bash
-        run: rm -f gen modp_b64_gen gen.exe gen.exe.manifest modp_b64_gen.exe modp_b64_gen.exe.manifest
+        # Use grep -v to list files NOT matching the patterns and then xargs rm
+        # This is safer than a direct rm with wildcards which might fail if no matches
+        run: |
+          ls | grep -v -e '^gen$' -e '^modp_b64_gen$' -e '^gen\.exe$' -e '^gen\.exe\.manifest$' -e '^modp_b64_gen\.exe$' -e '^modp_b64_gen\.exe\.manifest$' | xargs rm -f
+        # Alternative using find: find . ! \( -name 'gen*' -o -name 'modp_b64_gen*' \) -delete
 
       - name: (Windows) Make portable zip
         if: matrix.os == 'windows-latest'
         working-directory: aseprite/build/bin
+        # Use cmd shell for Windows-specific file operations if needed, or bash
+        shell: bash
         run: echo '# This file is here so Aseprite behaves as a portable program' > aseprite.ini
 
       - name: Create release archive
         working-directory: aseprite/build/bin
-        run: 7z a Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}.zip *
+        # Ensure 7z is in the PATH - brew installs it on macOS, apt installs it on Ubuntu,
+        # on Windows, seanmiddleditch/gha-setup-vsdevenv@v1 might include it or you might need
+        # a separate step/action to install p7zip if not available.
+        run: 7z a Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ matrix.os }}.zip *
 
       - name: Upload release asset
         uses: actions/upload-release-asset@v1
-        if: ${{ needs.check-version.outputs.should_build == 'true' }} # Only upload if we created a new release
+        if: ${{ needs.check-version.outputs.should_build == 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.check-version.outputs.upload_url }}
-          asset_path: aseprite/build/bin/Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}.zip
-          asset_name: Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}.zip
+          asset_path: aseprite/build/bin/Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ matrix.os }}.zip
+          asset_name: Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ matrix.os }}.zip
           asset_content_type: application/zip
