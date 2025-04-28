@@ -36,9 +36,5 @@ That is why we recommend you to modify the **os** line to only build for the OS 
 |Ubuntu|10|1|
 |macOS|8|10|
 
-# References to other Aseprite builders
-- https://github.com/haxpor/aseprite-macos-buildsh => Script which lets you build automatically on macOS
-- https://github.com/Insouciant21/action_aseprite => Uses GitHub Actions, but currently has unoptimized binaries and these are publicly available which goes against Aseprite EULA
-
 # Support Aseprite
 Keep supporting Aseprite at https://aseprite.org/#buy
