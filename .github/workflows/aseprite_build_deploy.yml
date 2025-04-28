@@ -119,10 +119,28 @@ jobs:
           echo "OS_NAME=${OS_NAME}" >> $GITHUB_OUTPUT
           echo "SKIA_DIR_SUFFIX=${SKIA_DIR_SUFFIX}" >> $GITHUB_OUTPUT
 
+      # Install dependencies (Non-Windows)
+      # This step is effectively skipped when matrix is only windows-latest
       - name: Install dependencies (Non-Windows - not applicable with matrix: [windows-latest])
-        if: matrix.os != 'windows-latest'
+        if: matrix.os != 'windows-latest' # This entire step's condition
         run: |
-          echo "Skipping non-Windows dependency installation as matrix is only Windows."
+          # The script to run if the condition above is true
+          case ${{ matrix.os }} in
+            ubuntu-latest)
+              echo "Installing Ubuntu dependencies..."
+              sudo apt update
+              sudo apt install -y cmake ninja-build libxcursor-dev libxi-dev libgl1-mesa-dev
+              ;;
+            macOS-latest)
+              echo "Installing macOS dependencies..."
+              brew update
+              brew install ninja p7zip
+              ;;
+            *)
+              echo "Unknown OS for dependency installation"
+              exit 1
+              ;;
+          esac
 
       # Manual setup for Ninja on Windows to avoid deprecated command
       - name: (Windows) Setup Ninja
