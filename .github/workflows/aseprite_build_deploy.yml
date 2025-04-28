@@ -19,7 +19,7 @@ jobs:
       latest_tag: ${{ steps.version_info.outputs.latest_tag }}
       should_build: ${{ steps.should_build.outputs.should_build }}
       upload_url: ${{ steps.create_release.outputs.upload_url }}
-      version_info: ${{ steps.version_info.outputs.version_info }} # Ensure version_info is also an output
+      version_info: ${{ steps.version_info.outputs.version_info }}
     steps:
     - name: Get latest version info
       id: version_info
@@ -38,8 +38,7 @@ jobs:
         echo "download_url=${DOWNLOAD_URL}" >> $GITHUB_OUTPUT
 
         # Set multi-line output using a delimiter for version_info
-        # Choose a unique delimiter, e.g., EOF_VERSION_INFO
-        DELIMITER=$(uuidgen) # Use uuidgen for a highly unique delimiter
+        DELIMITER=$(uuidgen)
         echo "version_info<<$DELIMITER" >> $GITHUB_OUTPUT
         echo "${VERSION_INFO}" >> $GITHUB_OUTPUT
         echo "$DELIMITER" >> $GITHUB_OUTPUT
@@ -69,7 +68,7 @@ jobs:
         tag_name: ${{ steps.version_info.outputs.latest_tag }}
         release_name: Release Aseprite ${{ steps.version_info.outputs.latest_tag }}
         body: |
-          ${{ steps.version_info.outputs.version_info }} # This will now correctly use the multi-line output
+          ${{ steps.version_info.outputs.version_info }}
         draft: true
         prerelease: false
 
@@ -110,12 +109,10 @@ jobs:
           echo "OS_NAME=${OS_NAME}" >> $GITHUB_OUTPUT
           echo "SKIA_DIR_SUFFIX=${SKIA_DIR_SUFFIX}" >> $GITHUB_OUTPUT
 
-      - name: Install dependencies
+      - name: Install dependencies (Linux/macOS)
+        if: matrix.os != 'windows-latest'
         run: |
           case ${{ matrix.os }} in
-            windows-latest)
-              echo "Installing Windows dependencies..."
-              ;;
             ubuntu-latest)
               echo "Installing Ubuntu dependencies..."
               sudo apt update
@@ -132,9 +129,20 @@ jobs:
               ;;
           esac
 
+      # Manual setup for Ninja on Windows to avoid deprecated command
       - name: (Windows) Setup Ninja
         if: matrix.os == 'windows-latest'
-        uses: seanmiddleditch/gha-setup-ninja@v1
+        run: |
+          echo "Setting up Ninja on Windows..."
+          # Download Ninja
+          curl -L https://github.com/ninja-build/ninja/releases/download/v1.11.1/ninja-win.zip -o ninja-win.zip
+          # Create a directory for Ninja and extract
+          mkdir ninja-build
+          unzip ninja-win.zip -d ninja-build
+          # Add the directory to the PATH using environment file
+          echo "$(pwd)/ninja-build" >> $GITHUB_PATH
+          # Verify Ninja is in PATH
+          ninja --version
 
       - name: (Windows) Setup Visual Studio Environment
         if: matrix.os == 'windows-latest'
